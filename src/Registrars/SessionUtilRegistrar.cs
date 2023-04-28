@@ -1,7 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Soenneker.Blazor.Navigation;
-using Soenneker.Blazor.Navigation.Abstract;
+using Soenneker.Blazor.Utils.Navigation.Registrars;
 using Soenneker.Blazor.Utils.Session.Abstract;
 
 namespace Soenneker.Blazor.Utils.Session.Registrars;
@@ -16,7 +15,7 @@ public static class SessionUtilRegistrar
     /// </summary>
     public static void AddSessionUtil(this IServiceCollection services)
     {
-        services.TryAddScoped<INavigationUtil, NavigationUtil>();
+        services.AddNavigationUtil();
         services.TryAddScoped<ISessionUtil, SessionUtil>();
     }
 }
