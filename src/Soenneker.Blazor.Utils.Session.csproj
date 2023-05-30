@@ -39,7 +39,7 @@
 
         <PackageReference Include="Microsoft.SourceLink.GitHub" Version="1.1.1" PrivateAssets="All" />
         <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="1.0.15" />
-        <PackageReference Include="Soenneker.Extensions.Configuration" Version="1.0.27" />
+        <PackageReference Include="Soenneker.Extensions.Configuration" Version="1.0.29" />
         <PackageReference Include="Soenneker.Utils.AsyncSingleton" Version="1.0.20" />
     </ItemGroup>
 </Project>
