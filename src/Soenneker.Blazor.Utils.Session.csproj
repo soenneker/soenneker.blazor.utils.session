@@ -37,7 +37,7 @@
         <None Include="..\LICENSE" Pack="true" PackagePath="\" />
         <None Include="..\icon.png" Pack="true" PackagePath="\" />
 
-        <PackageReference Include="Microsoft.SourceLink.GitHub" Version="1.1.1" PrivateAssets="All" />
+        <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
         <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="2.0.91" />
         <PackageReference Include="Soenneker.Extensions.Configuration" Version="2.0.127" />
         <PackageReference Include="Soenneker.Utils.AsyncSingleton" Version="1.0.75" />
