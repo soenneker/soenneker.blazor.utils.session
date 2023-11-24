@@ -63,7 +63,7 @@ public class SessionUtil : ISessionUtil
         {
             if (_jwtExpiration == null)
             {
-                SessionHasExpired(true);
+                ExpireSession(true);
                 return;
             }
 
@@ -72,15 +72,15 @@ public class SessionUtil : ISessionUtil
             if (utcNow < _jwtExpiration!.Value)
                 continue;
 
-            SessionHasExpired(false);
+            ExpireSession(false);
             return;
         }
     }
 
-    private void SessionHasExpired(bool error)
+    public void ExpireSession(bool error)
     {
         if (error)
-            _logger.LogError("Session expiration must have errored and is null, so resetting and exiting out of runner");
+            _logger.LogError("Session expiration has errored and is null, so resetting and exiting");
         else
             _logger.LogWarning("Session has expired, navigating to expiration page...");
 

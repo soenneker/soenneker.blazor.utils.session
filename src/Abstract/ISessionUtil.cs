@@ -10,4 +10,6 @@ namespace Soenneker.Blazor.Utils.Session.Abstract;
 public interface ISessionUtil : IDisposable, IAsyncDisposable
 {
     void UpdateWithAccessToken(DateTime expiration);
+
+    void ExpireSession(bool error);
 }
