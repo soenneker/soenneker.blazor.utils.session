@@ -8,5 +8,5 @@
 ## Installation
 
 ```
-Install-Package Soenneker.Blazor.Utils.Session
+dotnet add package Soenneker.Blazor.Utils.Session
 ```
