@@ -38,7 +38,7 @@ public class SessionUtil : ISessionUtil
         _timer = new AsyncSingleton<PeriodicTimer>(() => new PeriodicTimer(TimeSpan.FromSeconds(10)));
     }
 
-    public void UpdateWithAccessToken(DateTime expiration)
+    public void UpdateWithAccessToken(DateTime expiration, CancellationToken cancellationToken = default)
     {
         if (_jwtExpiration == expiration)
             return;
@@ -50,16 +50,16 @@ public class SessionUtil : ISessionUtil
             _running = true;
 
             // We don't want to await on this because it never ends
-            _ = RunInBackground();
+            _ = RunInBackground(cancellationToken);
         }
     }
 
-    public async Task RunInBackground()
+    private async Task RunInBackground(CancellationToken cancellationToken)
     {
         // avoids another lazy lookup in the loop
-        PeriodicTimer timer = await _timer.Get();
+        PeriodicTimer timer = await _timer.Get(cancellationToken);
 
-        while (await timer.WaitForNextTickAsync())
+        while (await timer.WaitForNextTickAsync(cancellationToken))
         {
             if (_jwtExpiration == null)
             {
