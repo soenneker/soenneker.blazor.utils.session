@@ -39,7 +39,7 @@
 
         
         <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="2.1.307" />
-        <PackageReference Include="Soenneker.Extensions.Configuration" Version="2.1.393" />
+        <PackageReference Include="Soenneker.Extensions.Configuration" Version="2.1.394" />
         <PackageReference Include="Soenneker.Utils.AsyncSingleton" Version="2.1.352" />
     </ItemGroup>
 </Project>
