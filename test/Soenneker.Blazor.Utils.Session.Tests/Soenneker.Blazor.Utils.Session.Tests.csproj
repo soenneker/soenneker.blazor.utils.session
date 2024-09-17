@@ -21,7 +21,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\src\Soenneker.Blazor.Utils.Session.csproj" />
+        <ProjectReference Include="..\..\src\Soenneker.Blazor.Utils.Session.csproj" />
     </ItemGroup>
 
 </Project>
