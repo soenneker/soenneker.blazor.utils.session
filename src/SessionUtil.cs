@@ -6,7 +6,8 @@ using Microsoft.Extensions.Logging;
 using Soenneker.Blazor.Utils.Navigation.Abstract;
 using Soenneker.Blazor.Utils.Session.Abstract;
 using Soenneker.Extensions.String;
-using Soenneker.Utils.AsyncSingleton;
+using Soenneker.Extensions.Task;
+using Soenneker.Extensions.ValueTask;
 
 namespace Soenneker.Blazor.Utils.Session;
 
@@ -17,9 +18,7 @@ public class SessionUtil : ISessionUtil
     private readonly ILogger<SessionUtil> _logger;
 
     private DateTime? _jwtExpiration;
-    private bool _running;
-
-    private readonly AsyncSingleton<PeriodicTimer> _timer;
+    private CancellationTokenSource? _cts;
 
     private readonly string _sessionExpiredUri;
 
@@ -30,54 +29,60 @@ public class SessionUtil : ISessionUtil
 
         var sessionExpiredUri = config.GetValue<string>("Session:Uri");
 
-        if (sessionExpiredUri.HasContent())
-            _sessionExpiredUri = sessionExpiredUri;
-        else
-            _sessionExpiredUri = "errors/sessionexpired";
-
-        _timer = new AsyncSingleton<PeriodicTimer>(() => new PeriodicTimer(TimeSpan.FromSeconds(10)));
+        _sessionExpiredUri = sessionExpiredUri.HasContent() ? sessionExpiredUri : "errors/sessionexpired";
     }
 
-    public void UpdateWithAccessToken(DateTime expiration, CancellationToken cancellationToken = default)
+    public async ValueTask UpdateWithAccessToken(DateTime expiration)
     {
         if (_jwtExpiration == expiration)
             return;
 
         _jwtExpiration = expiration;
 
-        if (!_running)
+        if (_cts != null)
         {
-            _running = true;
-
-            // We don't want to await on this because it never ends
-            _ = RunInBackground(cancellationToken);
+            await _cts.CancelAsync().NoSync();
+            _cts.Dispose();
         }
+
+        _cts = new CancellationTokenSource();
+
+        _ = RunInBackground(_cts.Token);
     }
 
     private async Task RunInBackground(CancellationToken cancellationToken)
     {
-        // avoids another lazy lookup in the loop
-        PeriodicTimer timer = await _timer.Get(cancellationToken);
-
-        while (await timer.WaitForNextTickAsync(cancellationToken))
+        if (_jwtExpiration == null)
         {
-            if (_jwtExpiration == null)
-            {
-                ExpireSession(true);
-                return;
-            }
-
-            DateTime utcNow = DateTime.UtcNow;
-
-            if (utcNow < _jwtExpiration!.Value)
-                continue;
-
-            ExpireSession(false);
+            await ExpireSession(true).NoSync();
             return;
+        }
+
+        TimeSpan delay = _jwtExpiration.Value - DateTime.UtcNow;
+
+        if (delay <= TimeSpan.Zero)
+        {
+            await ExpireSession(false).NoSync();
+            return;
+        }
+
+        try
+        {
+            await Task.Delay(delay, cancellationToken).NoSync();
+        }
+        catch (TaskCanceledException)
+        {
+            // Task was canceled due to a new expiration time being set.
+            return;
+        }
+
+        if (_jwtExpiration == null || DateTime.UtcNow >= _jwtExpiration.Value)
+        {
+            await ExpireSession(false).NoSync();
         }
     }
 
-    public void ExpireSession(bool error)
+    public async ValueTask ExpireSession(bool error)
     {
         if (error)
             _logger.LogError("Session expiration has errored and is null, so resetting and exiting");
@@ -85,22 +90,38 @@ public class SessionUtil : ISessionUtil
             _logger.LogWarning("Session has expired, navigating to expiration page...");
 
         _jwtExpiration = null;
-        _running = false;
+
+        if (_cts != null)
+        {
+            await _cts.CancelAsync().NoSync();
+            _cts.Dispose();
+            _cts = null;
+        }
 
         _navigationUtil.NavigateTo(_sessionExpiredUri);
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        GC.SuppressFinalize(this);
+        if (_cts != null)
+        {
+            await _cts.CancelAsync().NoSync();
+            _cts.Dispose();
+            _cts = null;
+        }
 
-        return _timer.DisposeAsync();
+        GC.SuppressFinalize(this);
     }
 
     public void Dispose()
     {
-        GC.SuppressFinalize(this);
+        if (_cts != null)
+        {
+            _cts?.Cancel();
+            _cts?.Dispose();
+            _cts = null;
+        }
 
-        _timer.Dispose();
+        GC.SuppressFinalize(this);
     }
 }
