@@ -39,6 +39,6 @@
 
         <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="2.1.380" />
         <PackageReference Include="Soenneker.Extensions.Configuration" Version="2.1.482" />
-        <PackageReference Include="Soenneker.Extensions.ValueTask" Version="2.1.51" />
+        <PackageReference Include="Soenneker.Extensions.ValueTask" Version="3.0.52" />
     </ItemGroup>
 </Project>
