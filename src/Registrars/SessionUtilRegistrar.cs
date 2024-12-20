@@ -13,7 +13,7 @@ public static class SessionUtilRegistrar
     /// <summary>
     /// Shorthand for <code>services.AddScoped</code>
     /// </summary>
-    public static void AddSessionUtil(this IServiceCollection services)
+    public static void AddSessionUtilAsScoped(this IServiceCollection services)
     {
         services.AddNavigationUtil();
         services.TryAddScoped<ISessionUtil, SessionUtil>();
