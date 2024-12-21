@@ -4,6 +4,7 @@ using Serilog;
 using Soenneker.Fixtures.Unit;
 using Soenneker.Utils.Test;
 using Soenneker.Blazor.Utils.Session.Registrars;
+using Soenneker.Blazor.Mocks.NavigationManager.Registrars;
 
 namespace Soenneker.Blazor.Utils.Session.Tests;
 
@@ -12,6 +13,8 @@ public class Fixture : UnitFixture
     public override System.Threading.Tasks.ValueTask InitializeAsync()
     {
         SetupIoC(Services);
+
+        Services.AddMockNavigationManagerAsScoped();
 
         return base.InitializeAsync();
     }
