@@ -38,7 +38,7 @@
         <None Include="..\icon.png" Pack="true" PackagePath="\" />
 
         <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="3.0.740" />
-        <PackageReference Include="Soenneker.Extensions.Configuration" Version="3.0.640" />
+        <PackageReference Include="Soenneker.Extensions.Configuration" Version="3.0.641" />
         <PackageReference Include="Soenneker.Extensions.Task" Version="3.0.88" />
         <PackageReference Include="Soenneker.Extensions.ValueTask" Version="3.0.78" />
     </ItemGroup>
