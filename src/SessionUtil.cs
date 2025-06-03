@@ -8,11 +8,12 @@ using Soenneker.Blazor.Utils.Session.Abstract;
 using Soenneker.Extensions.String;
 using Soenneker.Extensions.Task;
 using Soenneker.Extensions.ValueTask;
+using Soenneker.Utils.Delay;
 
 namespace Soenneker.Blazor.Utils.Session;
 
 /// <inheritdoc cref="ISessionUtil"/>
-public class SessionUtil : ISessionUtil
+public sealed class SessionUtil : ISessionUtil
 {
     private readonly INavigationUtil _navigationUtil;
     private readonly ILogger<SessionUtil> _logger;
@@ -68,7 +69,7 @@ public class SessionUtil : ISessionUtil
 
         try
         {
-            await Task.Delay(delay, cancellationToken).NoSync();
+            await DelayUtil.Delay(delay, null, cancellationToken).NoSync();
         }
         catch (TaskCanceledException)
         {
