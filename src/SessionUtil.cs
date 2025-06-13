@@ -1,14 +1,15 @@
-﻿using System;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Nito.AsyncEx;
 using Soenneker.Blazor.Utils.Navigation.Abstract;
 using Soenneker.Blazor.Utils.Session.Abstract;
 using Soenneker.Extensions.String;
 using Soenneker.Extensions.Task;
 using Soenneker.Extensions.ValueTask;
 using Soenneker.Utils.Delay;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Soenneker.Blazor.Utils.Session;
 
@@ -23,6 +24,10 @@ public sealed class SessionUtil : ISessionUtil
 
     private readonly string _sessionExpiredUri;
 
+    private readonly AsyncLock _updateLock = new();
+
+    private bool _hasRedirected;
+
     public SessionUtil(INavigationUtil navigationUtil, ILogger<SessionUtil> logger, IConfiguration config)
     {
         _navigationUtil = navigationUtil;
@@ -35,61 +40,87 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask UpdateWithAccessToken(DateTime expiration)
     {
-        if (_jwtExpiration == expiration)
-            return;
-
-        _jwtExpiration = expiration;
-
-        if (_cts != null)
+        using (await _updateLock.LockAsync().ConfigureAwait(false))
         {
-            await _cts.CancelAsync().NoSync();
-            _cts.Dispose();
+            _hasRedirected = false;
+
+            if (_jwtExpiration == expiration)
+                return;
+
+            _jwtExpiration = expiration;
+
+            if (_cts != null)
+            {
+                await _cts.CancelAsync().NoSync();
+                _cts.Dispose();
+            }
+
+            _cts = new CancellationTokenSource();
+            _ = RunInBackground(_cts.Token);
         }
-
-        _cts = new CancellationTokenSource();
-
-        _ = RunInBackground(_cts.Token);
     }
 
     private async Task RunInBackground(CancellationToken cancellationToken)
     {
-        if (_jwtExpiration == null)
-        {
-            await ExpireSession(true).NoSync();
-            return;
-        }
-
-        TimeSpan delay = _jwtExpiration.Value - DateTime.UtcNow;
-
-        if (delay <= TimeSpan.Zero)
-        {
-            await ExpireSession(false).NoSync();
-            return;
-        }
-
         try
         {
-            await DelayUtil.Delay(delay, null, cancellationToken).NoSync();
-        }
-        catch (TaskCanceledException)
-        {
-            // Task was canceled due to a new expiration time being set.
-            return;
-        }
+            if (_jwtExpiration == null)
+            {
+                await ClearStateAndRedirect(true).NoSync();
+                return;
+            }
 
-        if (_jwtExpiration == null || DateTime.UtcNow >= _jwtExpiration.Value)
+            TimeSpan delay = _jwtExpiration.Value - DateTime.UtcNow;
+
+            if (delay <= TimeSpan.Zero)
+            {
+                await ClearStateAndRedirect(false).NoSync();
+                return;
+            }
+
+            try
+            {
+                await DelayUtil.Delay(delay, null, cancellationToken).NoSync();
+            }
+            catch (TaskCanceledException)
+            {
+                // Task was canceled due to a new expiration time being set.
+                return;
+            }
+
+            if (_jwtExpiration == null || DateTime.UtcNow >= _jwtExpiration.Value)
+            {
+                await ClearStateAndRedirect(false).NoSync();
+            }
+        }
+        catch (Exception ex)
         {
-            await ExpireSession(false).NoSync();
+            _logger.LogError(ex, "Session background loop failed");
         }
     }
 
-    public async ValueTask ExpireSession(bool error)
+    public async ValueTask ClearStateAndRedirect(bool error)
     {
-        if (error)
-            _logger.LogError("Session expiration has errored and is null, so resetting and exiting");
-        else
-            _logger.LogWarning("Session has expired, navigating to expiration page...");
+        using (await _updateLock.LockAsync().ConfigureAwait(false))
+        {
+            // only navigate once per session
+            if (_hasRedirected)
+                return;
 
+            _hasRedirected = true;
+        }
+
+        if (error)
+            _logger.LogError("Session expiration errored, resetting state");
+        else
+            _logger.LogWarning("Session expired, redirecting to expiration page");
+
+        await ClearState().NoSync();
+        _navigationUtil.NavigateTo(_sessionExpiredUri);
+    }
+
+    public async ValueTask ClearState()
+    {
         _jwtExpiration = null;
 
         if (_cts != null)
@@ -98,20 +129,11 @@ public sealed class SessionUtil : ISessionUtil
             _cts.Dispose();
             _cts = null;
         }
-
-        _navigationUtil.NavigateTo(_sessionExpiredUri);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_cts != null)
-        {
-            await _cts.CancelAsync().NoSync();
-            _cts.Dispose();
-            _cts = null;
-        }
-
-        GC.SuppressFinalize(this);
+        return ClearState();
     }
 
     public void Dispose()
@@ -122,7 +144,5 @@ public sealed class SessionUtil : ISessionUtil
             _cts?.Dispose();
             _cts = null;
         }
-
-        GC.SuppressFinalize(this);
     }
 }

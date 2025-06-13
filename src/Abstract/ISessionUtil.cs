@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Soenneker.Blazor.Utils.Session.Abstract;
@@ -12,5 +13,7 @@ public interface ISessionUtil : IDisposable, IAsyncDisposable
 {
     ValueTask UpdateWithAccessToken(DateTime expiration);
 
-    ValueTask ExpireSession(bool error);
+    ValueTask ClearStateAndRedirect(bool error);
+
+    ValueTask ClearState();
 }
