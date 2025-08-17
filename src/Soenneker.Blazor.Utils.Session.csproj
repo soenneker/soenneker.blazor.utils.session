@@ -39,7 +39,7 @@
         <PackageReference Include="Nito.AsyncEx" Version="5.1.2" />
 
         <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="3.0.997" />
-        <PackageReference Include="Soenneker.Extensions.Configuration" Version="3.0.714" />
+        <PackageReference Include="Soenneker.Extensions.Configuration" Version="3.0.715" />
         <PackageReference Include="Soenneker.Extensions.Task" Version="3.0.104" />
         <PackageReference Include="Soenneker.Extensions.ValueTask" Version="3.0.94" />
         <PackageReference Include="Soenneker.Utils.Delay" Version="3.0.27" />
