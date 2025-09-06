@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Nito.AsyncEx;
 using Soenneker.Blazor.Utils.Navigation.Abstract;
@@ -40,7 +40,7 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask UpdateWithAccessToken(DateTime expiration)
     {
-        using (await _updateLock.LockAsync().ConfigureAwait(false))
+        using (await _updateLock.LockAsync())
         {
             _hasRedirected = false;
 
@@ -51,7 +51,7 @@ public sealed class SessionUtil : ISessionUtil
 
             if (_cts != null)
             {
-                await _cts.CancelAsync().NoSync();
+                await _cts.CancelAsync();
                 _cts.Dispose();
             }
 
@@ -66,7 +66,7 @@ public sealed class SessionUtil : ISessionUtil
         {
             if (_jwtExpiration == null)
             {
-                await ClearStateAndRedirect(true).NoSync();
+                await ClearStateAndRedirect(true);
                 return;
             }
 
@@ -74,13 +74,13 @@ public sealed class SessionUtil : ISessionUtil
 
             if (delay <= TimeSpan.Zero)
             {
-                await ClearStateAndRedirect(false).NoSync();
+                await ClearStateAndRedirect(false);
                 return;
             }
 
             try
             {
-                await DelayUtil.Delay(delay, null, cancellationToken).NoSync();
+                await DelayUtil.Delay(delay, null, cancellationToken);
             }
             catch (TaskCanceledException)
             {
@@ -90,7 +90,7 @@ public sealed class SessionUtil : ISessionUtil
 
             if (_jwtExpiration == null || DateTime.UtcNow >= _jwtExpiration.Value)
             {
-                await ClearStateAndRedirect(false).NoSync();
+                await ClearStateAndRedirect(false);
             }
         }
         catch (Exception ex)
@@ -101,7 +101,7 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask ClearStateAndRedirect(bool error)
     {
-        using (await _updateLock.LockAsync().ConfigureAwait(false))
+        using (await _updateLock.LockAsync())
         {
             // only navigate once per session
             if (_hasRedirected)
@@ -115,7 +115,7 @@ public sealed class SessionUtil : ISessionUtil
         else
             _logger.LogWarning("Session expired, redirecting to expiration page");
 
-        await ClearState().NoSync();
+        await ClearState();
         _navigationUtil.NavigateTo(_sessionExpiredUri);
     }
 
@@ -125,7 +125,7 @@ public sealed class SessionUtil : ISessionUtil
 
         if (_cts != null)
         {
-            await _cts.CancelAsync().NoSync();
+            await _cts.CancelAsync();
             _cts.Dispose();
             _cts = null;
         }
