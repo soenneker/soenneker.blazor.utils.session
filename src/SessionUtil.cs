@@ -39,7 +39,7 @@ public sealed class SessionUtil : ISessionUtil
 
     private static readonly TimeSpan _refreshThreshold = TimeSpan.FromMinutes(1);
 
-    // Max Task.Delay we will schedule in one shot (keep well below int.MaxValue ms)
+    // Max Task.Delay we will schedule in one shot (keep well below int.MaxValue ms) 
     private static readonly TimeSpan _maxDelayChunk = TimeSpan.FromDays(20);
 
     public SessionUtil(INavigationUtil navigationUtil, IAccessTokenProvider accessTokenProvider, ILogger<SessionUtil> logger, IConfiguration config,
