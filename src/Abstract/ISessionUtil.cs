@@ -15,6 +15,8 @@ namespace Soenneker.Blazor.Utils.Session.Abstract;
 /// </remarks>
 public interface ISessionUtil : IDisposable, IAsyncDisposable
 {
+    ValueTask<string> GetAccessToken(CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Updates the session expiration timer using the specified JWT expiration time.
     /// Cancels any existing timer and schedules a new background task to monitor expiration.
@@ -22,10 +24,11 @@ public interface ISessionUtil : IDisposable, IAsyncDisposable
     /// <param name="expiration">
     /// The <see cref="DateTime"/> (UTC) when the JSON Web Token will expire.
     /// </param>
+    /// <param name="cancellationToken"></param>
     /// <returns>
     /// A <see cref="ValueTask"/> that completes once the expiration update has been applied.
     /// </returns>
-    ValueTask UpdateWithAccessToken(DateTime expiration);
+    ValueTask UpdateWithAccessToken(DateTime expiration, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Clears all session state and navigates to the configured expiration page.
@@ -34,11 +37,12 @@ public interface ISessionUtil : IDisposable, IAsyncDisposable
     /// <c>true</c> if the state is being cleared due to an error (e.g., missing expiration);
     /// <c>false</c> if clearing due to normal token expiration.
     /// </param>
+    /// <param name="cancellationToken"></param>
     /// <returns>
     /// A <see cref="ValueTask"/> that completes once the state has been cleared
     /// and navigation has started.
     /// </returns>
-    ValueTask ClearStateAndRedirect(bool error);
+    ValueTask ClearStateAndRedirect(bool error, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Clears the JWT expiration and cancels any pending expiration timer
