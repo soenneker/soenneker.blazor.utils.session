@@ -38,7 +38,7 @@
         <None Include="..\icon.png" Pack="true" PackagePath="\" />
         <PackageReference Include="Nito.AsyncEx" Version="5.1.2" />
 
-        <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="4.0.1016" />
+        <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="4.0.1017" />
         <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.732" />
         <PackageReference Include="Soenneker.Extensions.Task" Version="4.0.106" />
         <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.96" />
