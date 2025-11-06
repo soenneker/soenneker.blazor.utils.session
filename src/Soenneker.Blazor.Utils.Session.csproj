@@ -42,6 +42,6 @@
         <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.731" />
         <PackageReference Include="Soenneker.Extensions.Task" Version="4.0.106" />
         <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.96" />
-        <PackageReference Include="Soenneker.Utils.Delay" Version="4.0.34" />
+        <PackageReference Include="Soenneker.Utils.Delay" Version="4.0.35" />
     </ItemGroup>
 </Project>
