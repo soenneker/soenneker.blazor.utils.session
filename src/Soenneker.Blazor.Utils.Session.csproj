@@ -41,7 +41,7 @@
         <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="4.0.1023" />
         <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.735" />
         <PackageReference Include="Soenneker.Extensions.Task" Version="4.0.107" />
-        <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.96" />
+        <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.97" />
         <PackageReference Include="Soenneker.Utils.Delay" Version="4.0.38" />
     </ItemGroup>
 </Project>
