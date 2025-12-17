@@ -37,6 +37,7 @@
         <None Include="..\LICENSE" Pack="true" PackagePath="\" />
         <None Include="..\icon.png" Pack="true" PackagePath="\" />
         <PackageReference Include="Nito.AsyncEx" Version="5.1.2" />
+        <PackageReference Include="Soenneker.Atomics.Longs" Version="4.0.1" />
 
         <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="4.0.1030" />
         <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.745" />

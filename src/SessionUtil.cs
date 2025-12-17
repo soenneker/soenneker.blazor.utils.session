@@ -7,11 +7,12 @@ using Soenneker.Blazor.Utils.Navigation.Abstract;
 using Soenneker.Blazor.Utils.Session.Abstract;
 using Soenneker.Extensions.String;
 using Soenneker.Utils.Delay;
+using Soenneker.Extensions.Task;
+using Soenneker.Extensions.ValueTask;
+using Soenneker.Atomics.Longs;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using Soenneker.Extensions.Task;
-using Soenneker.Extensions.ValueTask;
 
 namespace Soenneker.Blazor.Utils.Session;
 
@@ -24,7 +25,7 @@ public sealed class SessionUtil : ISessionUtil
     private readonly NavigationManager _navigationManager;
 
     // UTC ticks of JWT expiration; 0 means "none/unknown".
-    private long _expirationTicks;
+    private readonly AtomicLong _expirationTicks = new();
 
     // Swapped atomically whenever a new watcher is created.
     private CancellationTokenSource? _cts;
@@ -39,7 +40,7 @@ public sealed class SessionUtil : ISessionUtil
 
     private static readonly TimeSpan _refreshThreshold = TimeSpan.FromMinutes(1);
 
-    // Max Task.Delay we will schedule in one shot (keep well below int.MaxValue ms) 
+    // Max Task.Delay we will schedule in one shot (keep well below int.MaxValue ms)
     private static readonly TimeSpan _maxDelayChunk = TimeSpan.FromDays(20);
 
     public SessionUtil(INavigationUtil navigationUtil, IAccessTokenProvider accessTokenProvider, ILogger<SessionUtil> logger, IConfiguration config,
@@ -57,24 +58,28 @@ public sealed class SessionUtil : ISessionUtil
     public async ValueTask<string> GetAccessToken(CancellationToken cancellationToken = default)
     {
         DateTime now = DateTime.UtcNow;
-        long expTicks = Volatile.Read(ref _expirationTicks);
+        long expTicks = _expirationTicks.Read();
 
         // If we think the token is about to expire, clear our local watcher state so we re-evaluate.
         if (expTicks != 0 && (new DateTime(expTicks, DateTimeKind.Utc) - now) < _refreshThreshold)
         {
-            await ClearState().NoSync();
+            await ClearState()
+                .NoSync();
         }
 
         // Normal MSAL pipeline
-        AccessTokenResult result = await _accessTokenProvider.RequestAccessToken().NoSync();
+        AccessTokenResult result = await _accessTokenProvider.RequestAccessToken()
+                                                             .NoSync();
 
         if (result.TryGetToken(out AccessToken? token))
         {
-            await UpdateWithAccessToken(token.Expires.UtcDateTime, cancellationToken).NoSync();
+            await UpdateWithAccessToken(token.Expires.UtcDateTime, cancellationToken)
+                .NoSync();
             return token.Value;
         }
 
-        await ClearState().NoSync();
+        await ClearState()
+            .NoSync();
         _navigationManager.NavigateToLogin(result.InteractiveRequestUrl);
 
         throw new AccessTokenNotAvailableException(_navigationManager, result, null);
@@ -82,20 +87,24 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask UpdateWithAccessToken(DateTime expiration, CancellationToken cancellationToken = default)
     {
-        long newTicks = expiration.Kind == DateTimeKind.Utc ? expiration.Ticks : expiration.ToUniversalTime().Ticks;
+        long newTicks = expiration.Kind == DateTimeKind.Utc
+            ? expiration.Ticks
+            : expiration.ToUniversalTime()
+                        .Ticks;
 
         // Fast path: if unchanged, skip lock/work
-        if (Volatile.Read(ref _expirationTicks) == newTicks)
+        if (_expirationTicks.Read() == newTicks)
             return;
 
-        using (await _updateLock.LockAsync(cancellationToken).ConfigureAwait(false))
+        using (await _updateLock.LockAsync(cancellationToken)
+                                .ConfigureAwait(false))
         {
             _hasRedirected = false;
 
-            if (_expirationTicks == newTicks)
+            if (_expirationTicks.Read() == newTicks)
                 return;
 
-            Volatile.Write(ref _expirationTicks, newTicks);
+            _expirationTicks.Write(newTicks);
 
             var newCts = new CancellationTokenSource();
             CancellationTokenSource? oldCts = Interlocked.Exchange(ref _cts, newCts);
@@ -122,10 +131,11 @@ public sealed class SessionUtil : ISessionUtil
     {
         try
         {
-            long expTicks = Volatile.Read(ref _expirationTicks);
+            long expTicks = _expirationTicks.Read();
             if (expTicks == 0)
             {
-                await ClearStateAndRedirect(error: true, cancellationToken: token).NoSync();
+                await ClearStateAndRedirect(error: true, cancellationToken: token)
+                    .NoSync();
                 return;
             }
 
@@ -135,7 +145,8 @@ public sealed class SessionUtil : ISessionUtil
 
             if (delay <= TimeSpan.Zero)
             {
-                await ClearStateAndRedirect(error: false, cancellationToken: token).NoSync();
+                await ClearStateAndRedirect(error: false, cancellationToken: token)
+                    .NoSync();
                 return;
             }
 
@@ -146,7 +157,8 @@ public sealed class SessionUtil : ISessionUtil
 
                 try
                 {
-                    await DelayUtil.Delay(chunk, null, token).NoSync();
+                    await DelayUtil.Delay(chunk, null, token)
+                                   .NoSync();
                 }
                 catch (TaskCanceledException)
                 {
@@ -156,10 +168,11 @@ public sealed class SessionUtil : ISessionUtil
 
                 // Recompute remaining delay after each chunk
                 DateTime now2 = DateTime.UtcNow;
-                long currentExpTicks = Volatile.Read(ref _expirationTicks);
+                long currentExpTicks = _expirationTicks.Read();
                 if (currentExpTicks == 0)
                 {
-                    await ClearStateAndRedirect(error: false, cancellationToken: token).NoSync();
+                    await ClearStateAndRedirect(error: false, cancellationToken: token)
+                        .NoSync();
                     return;
                 }
 
@@ -171,10 +184,11 @@ public sealed class SessionUtil : ISessionUtil
             }
 
             // If after waiting we are expired or we lost our expiration, redirect
-            long finalExpTicks = Volatile.Read(ref _expirationTicks);
+            long finalExpTicks = _expirationTicks.Read();
             if (finalExpTicks == 0 || DateTime.UtcNow >= new DateTime(finalExpTicks, DateTimeKind.Utc))
             {
-                await ClearStateAndRedirect(error: false, cancellationToken: token).NoSync();
+                await ClearStateAndRedirect(error: false, cancellationToken: token)
+                    .NoSync();
             }
         }
         catch (Exception ex)
@@ -187,7 +201,8 @@ public sealed class SessionUtil : ISessionUtil
     {
         bool shouldNavigate;
 
-        using (await _updateLock.LockAsync(cancellationToken).ConfigureAwait(false))
+        using (await _updateLock.LockAsync(cancellationToken)
+                                .ConfigureAwait(false))
         {
             if (_hasRedirected)
                 return;
@@ -203,14 +218,15 @@ public sealed class SessionUtil : ISessionUtil
             else
                 _logger.LogWarning("Session expired, redirecting to expiration page");
 
-            await ClearState().NoSync();
+            await ClearState()
+                .NoSync();
             _navigationUtil.NavigateTo(_sessionExpiredUri);
         }
     }
 
     public async ValueTask ClearState()
     {
-        Volatile.Write(ref _expirationTicks, 0);
+        _expirationTicks.Write(0);
 
         CancellationTokenSource? cts = Interlocked.Exchange(ref _cts, null);
 
@@ -218,7 +234,8 @@ public sealed class SessionUtil : ISessionUtil
         {
             try
             {
-                await cts.CancelAsync().NoSync();
+                await cts.CancelAsync()
+                         .NoSync();
             }
             catch
             {
