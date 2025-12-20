@@ -26,7 +26,7 @@
         </PackageReference>
         <PackageReference Include="Soenneker.Blazor.Mocks.NavigationManager" Version="4.0.397" />
         <PackageReference Include="Soenneker.Utils.Test" Version="4.0.299" />
-        <PackageReference Include="Soenneker.Tests.FixturedUnit" Version="4.0.2092" />
+        <PackageReference Include="Soenneker.Tests.FixturedUnit" Version="4.0.2093" />
         <PackageReference Include="xUnit.v3" Version="3.2.1" />
     </ItemGroup>
 
