@@ -2,7 +2,6 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.WebAssembly.Authentication;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Nito.AsyncEx;
 using Soenneker.Blazor.Utils.Navigation.Abstract;
 using Soenneker.Blazor.Utils.Session.Abstract;
 using Soenneker.Extensions.String;
@@ -13,6 +12,7 @@ using Soenneker.Atomics.Longs;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Soenneker.Asyncs.Locks;
 
 namespace Soenneker.Blazor.Utils.Session;
 
@@ -25,7 +25,7 @@ public sealed class SessionUtil : ISessionUtil
     private readonly NavigationManager _navigationManager;
 
     // UTC ticks of JWT expiration; 0 means "none/unknown".
-    private readonly AtomicLong _expirationTicks = new();
+    private AtomicLong _expirationTicks;
 
     // Swapped atomically whenever a new watcher is created.
     private CancellationTokenSource? _cts;
@@ -96,8 +96,8 @@ public sealed class SessionUtil : ISessionUtil
         if (_expirationTicks.Read() == newTicks)
             return;
 
-        using (await _updateLock.LockAsync(cancellationToken)
-                                .ConfigureAwait(false))
+        using (await _updateLock.Lock(cancellationToken)
+                                .NoSync())
         {
             _hasRedirected = false;
 
@@ -201,8 +201,8 @@ public sealed class SessionUtil : ISessionUtil
     {
         bool shouldNavigate;
 
-        using (await _updateLock.LockAsync(cancellationToken)
-                                .ConfigureAwait(false))
+        using (await _updateLock.Lock(cancellationToken)
+                                .NoSync())
         {
             if (_hasRedirected)
                 return;
