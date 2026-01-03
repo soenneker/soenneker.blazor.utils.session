@@ -22,13 +22,13 @@ public interface ISessionUtil : IDisposable, IAsyncDisposable
     /// Cancels any existing timer and schedules a new background task to monitor expiration.
     /// </summary>
     /// <param name="expiration">
-    /// The <see cref="DateTime"/> (UTC) when the JSON Web Token will expire.
+    /// The <see cref="DateTimeOffset"/> (UTC) when the JSON Web Token will expire.
     /// </param>
     /// <param name="cancellationToken"></param>
     /// <returns>
     /// A <see cref="ValueTask"/> that completes once the expiration update has been applied.
     /// </returns>
-    ValueTask UpdateWithAccessToken(DateTime expiration, CancellationToken cancellationToken = default);
+    ValueTask UpdateWithAccessToken(DateTimeOffset expiration, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Clears all session state and navigates to the configured expiration page.

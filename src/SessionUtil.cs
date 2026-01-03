@@ -25,6 +25,7 @@ public sealed class SessionUtil : ISessionUtil
     private readonly NavigationManager _navigationManager;
 
     // UTC ticks of JWT expiration; 0 means "none/unknown".
+    // Stored as DateTimeOffset.UtcTicks (i.e., ticks from UTC DateTime).
     private AtomicLong _expirationTicks;
 
     // Swapped atomically whenever a new watcher is created.
@@ -57,11 +58,11 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask<string> GetAccessToken(CancellationToken cancellationToken = default)
     {
-        DateTime now = DateTime.UtcNow;
+        DateTimeOffset now = DateTimeOffset.UtcNow;
         long expTicks = _expirationTicks.Read();
 
         // If we think the token is about to expire, clear our local watcher state so we re-evaluate.
-        if (expTicks != 0 && (new DateTime(expTicks, DateTimeKind.Utc) - now) < _refreshThreshold)
+        if (expTicks != 0 && (new DateTimeOffset(expTicks, TimeSpan.Zero) - now) < _refreshThreshold)
         {
             await ClearState()
                 .NoSync();
@@ -73,7 +74,8 @@ public sealed class SessionUtil : ISessionUtil
 
         if (result.TryGetToken(out AccessToken? token))
         {
-            await UpdateWithAccessToken(token.Expires.UtcDateTime, cancellationToken)
+            // token.Expires is DateTimeOffset already
+            await UpdateWithAccessToken(token.Expires, cancellationToken)
                 .NoSync();
             return token.Value;
         }
@@ -85,12 +87,11 @@ public sealed class SessionUtil : ISessionUtil
         throw new AccessTokenNotAvailableException(_navigationManager, result, null);
     }
 
-    public async ValueTask UpdateWithAccessToken(DateTime expiration, CancellationToken cancellationToken = default)
+    public async ValueTask UpdateWithAccessToken(DateTimeOffset expiration, CancellationToken cancellationToken = default)
     {
-        long newTicks = expiration.Kind == DateTimeKind.Utc
-            ? expiration.Ticks
-            : expiration.ToUniversalTime()
-                        .Ticks;
+        // Normalize to UTC ticks for stable comparisons/storage
+        long newTicks = expiration.ToUniversalTime()
+                                  .UtcTicks;
 
         // Fast path: if unchanged, skip lock/work
         if (_expirationTicks.Read() == newTicks)
@@ -139,8 +140,8 @@ public sealed class SessionUtil : ISessionUtil
                 return;
             }
 
-            DateTime now = DateTime.UtcNow;
-            var expirationUtc = new DateTime(expTicks, DateTimeKind.Utc);
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            var expirationUtc = new DateTimeOffset(expTicks, TimeSpan.Zero);
             TimeSpan delay = expirationUtc - now;
 
             if (delay <= TimeSpan.Zero)
@@ -167,7 +168,7 @@ public sealed class SessionUtil : ISessionUtil
                 }
 
                 // Recompute remaining delay after each chunk
-                DateTime now2 = DateTime.UtcNow;
+                DateTimeOffset now2 = DateTimeOffset.UtcNow;
                 long currentExpTicks = _expirationTicks.Read();
                 if (currentExpTicks == 0)
                 {
@@ -176,7 +177,7 @@ public sealed class SessionUtil : ISessionUtil
                     return;
                 }
 
-                var currentExpUtc = new DateTime(currentExpTicks, DateTimeKind.Utc);
+                var currentExpUtc = new DateTimeOffset(currentExpTicks, TimeSpan.Zero);
                 delay = currentExpUtc - now2;
 
                 if (delay <= TimeSpan.Zero)
@@ -185,7 +186,7 @@ public sealed class SessionUtil : ISessionUtil
 
             // If after waiting we are expired or we lost our expiration, redirect
             long finalExpTicks = _expirationTicks.Read();
-            if (finalExpTicks == 0 || DateTime.UtcNow >= new DateTime(finalExpTicks, DateTimeKind.Utc))
+            if (finalExpTicks == 0 || DateTimeOffset.UtcNow >= new DateTimeOffset(finalExpTicks, TimeSpan.Zero))
             {
                 await ClearStateAndRedirect(error: false, cancellationToken: token)
                     .NoSync();
