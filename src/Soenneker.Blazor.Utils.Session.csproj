@@ -43,7 +43,7 @@
         <PackageReference Include="Soenneker.Atomics.Longs" Version="4.0.3" />
         <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="4.0.1033" />
         <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.747" />
-        <PackageReference Include="Soenneker.Extensions.Task" Version="4.0.109" />
+        <PackageReference Include="Soenneker.Extensions.Task" Version="4.0.110" />
         <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.102" />
         <PackageReference Include="Soenneker.Utils.Delay" Version="4.0.45" />
     </ItemGroup>
