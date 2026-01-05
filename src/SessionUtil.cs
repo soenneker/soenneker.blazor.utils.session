@@ -1,18 +1,18 @@
+using Soenneker.Extensions.Task;
+using Soenneker.Extensions.ValueTask;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.WebAssembly.Authentication;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Soenneker.Asyncs.Locks;
+using Soenneker.Atomics.Longs;
 using Soenneker.Blazor.Utils.Navigation.Abstract;
 using Soenneker.Blazor.Utils.Session.Abstract;
 using Soenneker.Extensions.String;
 using Soenneker.Utils.Delay;
-using Soenneker.Extensions.Task;
-using Soenneker.Extensions.ValueTask;
-using Soenneker.Atomics.Longs;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using Soenneker.Asyncs.Locks;
 
 namespace Soenneker.Blazor.Utils.Session;
 
@@ -24,6 +24,10 @@ public sealed class SessionUtil : ISessionUtil
     private readonly ILogger<SessionUtil> _logger;
     private readonly NavigationManager _navigationManager;
 
+    // Cached access token (string) + expiration (UTC ticks).
+    // _accessToken is read outside locks for fast path, but written under _updateLock for coherence.
+    private string? _accessToken;
+
     // UTC ticks of JWT expiration; 0 means "none/unknown".
     // Stored as DateTimeOffset.UtcTicks (i.e., ticks from UTC DateTime).
     private AtomicLong _expirationTicks;
@@ -33,7 +37,7 @@ public sealed class SessionUtil : ISessionUtil
 
     private readonly string _sessionExpiredUri;
 
-    // Protects redirect-once and CTS swap + redirect states when needed.
+    // Protects token refresh/update, redirect-once, and CTS swap.
     private readonly AsyncLock _updateLock = new();
 
     // Redirect flag; access under _updateLock when mutating
@@ -58,33 +62,61 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask<string> GetAccessToken(CancellationToken cancellationToken = default)
     {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        // --------
+        // Fast path: if we have a cached token, and it's not near expiry, return it with no async/MSAL work.
+        // --------
+        string? tokenValue = _accessToken;
         long expTicks = _expirationTicks.Read();
 
-        // If we think the token is about to expire, clear our local watcher state so we re-evaluate.
-        if (expTicks != 0 && (new DateTimeOffset(expTicks, TimeSpan.Zero) - now) < _refreshThreshold)
+        if (tokenValue is not null && expTicks != 0)
         {
-            await ClearState()
-                .NoSync();
+            long nowTicks = DateTimeOffset.UtcNow.UtcTicks;
+
+            if (expTicks - nowTicks >= _refreshThreshold.Ticks)
+                return tokenValue;
         }
 
-        // Normal MSAL pipeline
-        AccessTokenResult result = await _accessTokenProvider.RequestAccessToken()
-                                                             .NoSync();
-
-        if (result.TryGetToken(out AccessToken? token))
+        // --------
+        // Slow path: lock to avoid stampede refreshing the token.
+        // Re-check after acquiring lock (double-checked locking pattern).
+        // --------
+        using (await _updateLock.Lock(cancellationToken)
+                                .NoSync())
         {
-            // token.Expires is DateTimeOffset already
-            await UpdateWithAccessToken(token.Expires, cancellationToken)
+            tokenValue = _accessToken;
+            expTicks = _expirationTicks.Read();
+
+            if (tokenValue is not null && expTicks != 0)
+            {
+                long nowTicks = DateTimeOffset.UtcNow.UtcTicks;
+                if (expTicks - nowTicks >= _refreshThreshold.Ticks)
+                    return tokenValue;
+            }
+
+            // Normal MSAL pipeline
+            AccessTokenResult result = await _accessTokenProvider.RequestAccessToken()
+                                                                 .NoSync();
+
+            if (result.TryGetToken(out AccessToken? token))
+            {
+                _accessToken = token.Value;
+
+                await UpdateWithAccessToken(token.Expires, cancellationToken)
+                    .NoSync();
+
+                return _accessToken;
+            }
+
+            // Failed to acquire token: clear local state and force interactive.
+            _accessToken = null;
+
+            await ClearState_NoLock()
                 .NoSync();
-            return token.Value;
+
+            _navigationManager.NavigateToLogin(result.InteractiveRequestUrl);
+
+            throw new AccessTokenNotAvailableException(_navigationManager, result, null);
         }
-
-        await ClearState()
-            .NoSync();
-        _navigationManager.NavigateToLogin(result.InteractiveRequestUrl);
-
-        throw new AccessTokenNotAvailableException(_navigationManager, result, null);
     }
 
     public async ValueTask UpdateWithAccessToken(DateTimeOffset expiration, CancellationToken cancellationToken = default)
@@ -113,7 +145,8 @@ public sealed class SessionUtil : ISessionUtil
             try
             {
                 if (oldCts != null)
-                    await oldCts.CancelAsync();
+                    await oldCts.CancelAsync()
+                                .NoSync();
             }
             catch
             {
@@ -140,11 +173,11 @@ public sealed class SessionUtil : ISessionUtil
                 return;
             }
 
-            DateTimeOffset now = DateTimeOffset.UtcNow;
-            var expirationUtc = new DateTimeOffset(expTicks, TimeSpan.Zero);
-            TimeSpan delay = expirationUtc - now;
+            // Compute delay using ticks for less overhead
+            long nowTicks = DateTimeOffset.UtcNow.UtcTicks;
+            long remainingTicks = expTicks - nowTicks;
 
-            if (delay <= TimeSpan.Zero)
+            if (remainingTicks <= 0)
             {
                 await ClearStateAndRedirect(error: false, cancellationToken: token)
                     .NoSync();
@@ -152,9 +185,9 @@ public sealed class SessionUtil : ISessionUtil
             }
 
             // Chunk long delays to stay responsive to cancellation
-            while (delay > TimeSpan.Zero)
+            while (remainingTicks > 0)
             {
-                TimeSpan chunk = delay > _maxDelayChunk ? _maxDelayChunk : delay;
+                TimeSpan chunk = remainingTicks > _maxDelayChunk.Ticks ? _maxDelayChunk : TimeSpan.FromTicks(remainingTicks);
 
                 try
                 {
@@ -167,8 +200,6 @@ public sealed class SessionUtil : ISessionUtil
                     return;
                 }
 
-                // Recompute remaining delay after each chunk
-                DateTimeOffset now2 = DateTimeOffset.UtcNow;
                 long currentExpTicks = _expirationTicks.Read();
                 if (currentExpTicks == 0)
                 {
@@ -177,16 +208,15 @@ public sealed class SessionUtil : ISessionUtil
                     return;
                 }
 
-                var currentExpUtc = new DateTimeOffset(currentExpTicks, TimeSpan.Zero);
-                delay = currentExpUtc - now2;
+                long nowTicks2 = DateTimeOffset.UtcNow.UtcTicks;
+                remainingTicks = currentExpTicks - nowTicks2;
 
-                if (delay <= TimeSpan.Zero)
+                if (remainingTicks <= 0)
                     break;
             }
 
-            // If after waiting we are expired or we lost our expiration, redirect
             long finalExpTicks = _expirationTicks.Read();
-            if (finalExpTicks == 0 || DateTimeOffset.UtcNow >= new DateTimeOffset(finalExpTicks, TimeSpan.Zero))
+            if (finalExpTicks == 0 || DateTimeOffset.UtcNow.UtcTicks >= finalExpTicks)
             {
                 await ClearStateAndRedirect(error: false, cancellationToken: token)
                     .NoSync();
@@ -200,8 +230,6 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask ClearStateAndRedirect(bool error, CancellationToken cancellationToken = default)
     {
-        bool shouldNavigate;
-
         using (await _updateLock.Lock(cancellationToken)
                                 .NoSync())
         {
@@ -209,24 +237,37 @@ public sealed class SessionUtil : ISessionUtil
                 return;
 
             _hasRedirected = true;
-            shouldNavigate = true;
         }
 
-        if (shouldNavigate)
-        {
-            if (error)
-                _logger.LogError("Session expiration errored, resetting state");
-            else
-                _logger.LogWarning("Session expired, redirecting to expiration page");
+        if (error)
+            _logger.LogError("Session expiration errored, resetting state");
+        else
+            _logger.LogWarning("Session expired, redirecting to expiration page");
 
-            await ClearState()
+        await ClearState()
+            .NoSync();
+        _navigationUtil.NavigateTo(_sessionExpiredUri);
+    }
+
+    public ValueTask ClearState()
+    {
+        // Take the lock to keep state coherent if someone is refreshing token concurrently
+        return ClearState_Locked();
+    }
+
+    private async ValueTask ClearState_Locked()
+    {
+        using (await _updateLock.Lock(CancellationToken.None)
+                                .NoSync())
+        {
+            await ClearState_NoLock()
                 .NoSync();
-            _navigationUtil.NavigateTo(_sessionExpiredUri);
         }
     }
 
-    public async ValueTask ClearState()
+    private async ValueTask ClearState_NoLock()
     {
+        _accessToken = null;
         _expirationTicks.Write(0);
 
         CancellationTokenSource? cts = Interlocked.Exchange(ref _cts, null);
@@ -251,6 +292,10 @@ public sealed class SessionUtil : ISessionUtil
 
     public void Dispose()
     {
+        // Best-effort: dispose without awaiting.
+        _accessToken = null;
+        _expirationTicks.Write(0);
+
         CancellationTokenSource? cts = Interlocked.Exchange(ref _cts, null);
         if (cts == null)
             return;
