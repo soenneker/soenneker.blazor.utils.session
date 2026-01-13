@@ -1,5 +1,3 @@
-using Soenneker.Extensions.Task;
-using Soenneker.Extensions.ValueTask;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.WebAssembly.Authentication;
 using Microsoft.Extensions.Configuration;
@@ -48,7 +46,11 @@ public sealed class SessionUtil : ISessionUtil
     // Max Task.Delay we will schedule in one shot (keep well below int.MaxValue ms)
     private static readonly TimeSpan _maxDelayChunk = TimeSpan.FromDays(20);
 
-    public SessionUtil(INavigationUtil navigationUtil, IAccessTokenProvider accessTokenProvider, ILogger<SessionUtil> logger, IConfiguration config,
+    public SessionUtil(
+        INavigationUtil navigationUtil,
+        IAccessTokenProvider accessTokenProvider,
+        ILogger<SessionUtil> logger,
+        IConfiguration config,
         NavigationManager navigationManager)
     {
         _navigationUtil = navigationUtil;
@@ -63,7 +65,7 @@ public sealed class SessionUtil : ISessionUtil
     public async ValueTask<string> GetAccessToken(CancellationToken cancellationToken = default)
     {
         // --------
-        // Fast path: if we have a cached token, and it's not near expiry, return it with no async/MSAL work.
+        // Fast path: cached token and not near expiry
         // --------
         string? tokenValue = _accessToken;
         long expTicks = _expirationTicks.Read();
@@ -71,14 +73,13 @@ public sealed class SessionUtil : ISessionUtil
         if (tokenValue is not null && expTicks != 0)
         {
             long nowTicks = DateTimeOffset.UtcNow.UtcTicks;
-
             if (expTicks - nowTicks >= _refreshThreshold.Ticks)
                 return tokenValue;
         }
 
         // --------
         // Slow path: lock to avoid stampede refreshing the token.
-        // Re-check after acquiring lock (double-checked locking pattern).
+        // Double-check after acquiring lock.
         // --------
         using (await _updateLock.Lock(cancellationToken))
         {
@@ -99,9 +100,10 @@ public sealed class SessionUtil : ISessionUtil
             {
                 _accessToken = token.Value;
 
-                await UpdateWithAccessToken(token.Expires, cancellationToken);
+                // IMPORTANT: don't re-lock. We're already holding _updateLock.
+                await UpdateWithAccessToken_NoLock(token.Expires);
 
-                return _accessToken;
+                return _accessToken!;
             }
 
             // Failed to acquire token: clear local state and force interactive.
@@ -117,9 +119,7 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask UpdateWithAccessToken(DateTimeOffset expiration, CancellationToken cancellationToken = default)
     {
-        // Normalize to UTC ticks for stable comparisons/storage
-        long newTicks = expiration.ToUniversalTime()
-                                  .UtcTicks;
+        long newTicks = expiration.ToUniversalTime().UtcTicks;
 
         // Fast path: if unchanged, skip lock/work
         if (_expirationTicks.Read() == newTicks)
@@ -127,32 +127,39 @@ public sealed class SessionUtil : ISessionUtil
 
         using (await _updateLock.Lock(cancellationToken))
         {
-            _hasRedirected = false;
-
             if (_expirationTicks.Read() == newTicks)
                 return;
 
-            _expirationTicks.Write(newTicks);
-
-            var newCts = new CancellationTokenSource();
-            CancellationTokenSource? oldCts = Interlocked.Exchange(ref _cts, newCts);
-
-            try
-            {
-                if (oldCts != null)
-                    await oldCts.CancelAsync();
-            }
-            catch
-            {
-                /* ignore */
-            }
-            finally
-            {
-                oldCts?.Dispose();
-            }
-
-            _ = RunInBackground(newCts.Token);
+            await UpdateWithAccessToken_NoLock(expiration);
         }
+    }
+
+    // Assumes caller holds _updateLock
+    private async ValueTask UpdateWithAccessToken_NoLock(DateTimeOffset expiration)
+    {
+        long newTicks = expiration.ToUniversalTime().UtcTicks;
+
+        _hasRedirected = false;
+        _expirationTicks.Write(newTicks);
+
+        var newCts = new CancellationTokenSource();
+        CancellationTokenSource? oldCts = Interlocked.Exchange(ref _cts, newCts);
+
+        try
+        {
+            if (oldCts != null)
+                await oldCts.CancelAsync();
+        }
+        catch
+        {
+            /* ignore */
+        }
+        finally
+        {
+            oldCts?.Dispose();
+        }
+
+        _ = RunInBackground(newCts.Token);
     }
 
     private async Task RunInBackground(CancellationToken token)
@@ -160,6 +167,7 @@ public sealed class SessionUtil : ISessionUtil
         try
         {
             long expTicks = _expirationTicks.Read();
+
             if (expTicks == 0)
             {
                 await ClearStateAndRedirect(error: true, cancellationToken: token);
@@ -179,7 +187,9 @@ public sealed class SessionUtil : ISessionUtil
             // Chunk long delays to stay responsive to cancellation
             while (remainingTicks > 0)
             {
-                TimeSpan chunk = remainingTicks > _maxDelayChunk.Ticks ? _maxDelayChunk : TimeSpan.FromTicks(remainingTicks);
+                TimeSpan chunk = remainingTicks > _maxDelayChunk.Ticks
+                    ? _maxDelayChunk
+                    : TimeSpan.FromTicks(remainingTicks);
 
                 try
                 {
@@ -192,6 +202,7 @@ public sealed class SessionUtil : ISessionUtil
                 }
 
                 long currentExpTicks = _expirationTicks.Read();
+
                 if (currentExpTicks == 0)
                 {
                     await ClearStateAndRedirect(error: false, cancellationToken: token);
@@ -219,28 +230,27 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask ClearStateAndRedirect(bool error, CancellationToken cancellationToken = default)
     {
+        // Do all state mutation under the lock, including ClearState_NoLock,
+        // so we don't churn re-locking and we keep a single ownership boundary.
         using (await _updateLock.Lock(cancellationToken))
         {
             if (_hasRedirected)
                 return;
 
             _hasRedirected = true;
+
+            if (error)
+                _logger.LogError("Session expiration errored, resetting state");
+            else
+                _logger.LogWarning("Session expired, redirecting to expiration page");
+
+            await ClearState_NoLock();
         }
 
-        if (error)
-            _logger.LogError("Session expiration errored, resetting state");
-        else
-            _logger.LogWarning("Session expired, redirecting to expiration page");
-
-        await ClearState();
         _navigationUtil.NavigateTo(_sessionExpiredUri);
     }
 
-    public ValueTask ClearState()
-    {
-        // Take the lock to keep state coherent if someone is refreshing token concurrently
-        return ClearState_Locked();
-    }
+    public ValueTask ClearState() => ClearState_Locked();
 
     private async ValueTask ClearState_Locked()
     {
@@ -250,6 +260,7 @@ public sealed class SessionUtil : ISessionUtil
         }
     }
 
+    // Assumes caller holds _updateLock
     private async ValueTask ClearState_NoLock()
     {
         _accessToken = null;
