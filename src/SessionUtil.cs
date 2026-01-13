@@ -80,8 +80,7 @@ public sealed class SessionUtil : ISessionUtil
         // Slow path: lock to avoid stampede refreshing the token.
         // Re-check after acquiring lock (double-checked locking pattern).
         // --------
-        using (await _updateLock.Lock(cancellationToken)
-                                .NoSync())
+        using (await _updateLock.Lock(cancellationToken))
         {
             tokenValue = _accessToken;
             expTicks = _expirationTicks.Read();
@@ -94,15 +93,13 @@ public sealed class SessionUtil : ISessionUtil
             }
 
             // Normal MSAL pipeline
-            AccessTokenResult result = await _accessTokenProvider.RequestAccessToken()
-                                                                 .NoSync();
+            AccessTokenResult result = await _accessTokenProvider.RequestAccessToken();
 
             if (result.TryGetToken(out AccessToken? token))
             {
                 _accessToken = token.Value;
 
-                await UpdateWithAccessToken(token.Expires, cancellationToken)
-                    .NoSync();
+                await UpdateWithAccessToken(token.Expires, cancellationToken);
 
                 return _accessToken;
             }
@@ -110,8 +107,7 @@ public sealed class SessionUtil : ISessionUtil
             // Failed to acquire token: clear local state and force interactive.
             _accessToken = null;
 
-            await ClearState_NoLock()
-                .NoSync();
+            await ClearState_NoLock();
 
             _navigationManager.NavigateToLogin(result.InteractiveRequestUrl);
 
@@ -129,8 +125,7 @@ public sealed class SessionUtil : ISessionUtil
         if (_expirationTicks.Read() == newTicks)
             return;
 
-        using (await _updateLock.Lock(cancellationToken)
-                                .NoSync())
+        using (await _updateLock.Lock(cancellationToken))
         {
             _hasRedirected = false;
 
@@ -145,8 +140,7 @@ public sealed class SessionUtil : ISessionUtil
             try
             {
                 if (oldCts != null)
-                    await oldCts.CancelAsync()
-                                .NoSync();
+                    await oldCts.CancelAsync();
             }
             catch
             {
@@ -168,8 +162,7 @@ public sealed class SessionUtil : ISessionUtil
             long expTicks = _expirationTicks.Read();
             if (expTicks == 0)
             {
-                await ClearStateAndRedirect(error: true, cancellationToken: token)
-                    .NoSync();
+                await ClearStateAndRedirect(error: true, cancellationToken: token);
                 return;
             }
 
@@ -179,8 +172,7 @@ public sealed class SessionUtil : ISessionUtil
 
             if (remainingTicks <= 0)
             {
-                await ClearStateAndRedirect(error: false, cancellationToken: token)
-                    .NoSync();
+                await ClearStateAndRedirect(error: false, cancellationToken: token);
                 return;
             }
 
@@ -191,8 +183,7 @@ public sealed class SessionUtil : ISessionUtil
 
                 try
                 {
-                    await DelayUtil.Delay(chunk, null, token)
-                                   .NoSync();
+                    await DelayUtil.Delay(chunk, null, token);
                 }
                 catch (TaskCanceledException)
                 {
@@ -203,8 +194,7 @@ public sealed class SessionUtil : ISessionUtil
                 long currentExpTicks = _expirationTicks.Read();
                 if (currentExpTicks == 0)
                 {
-                    await ClearStateAndRedirect(error: false, cancellationToken: token)
-                        .NoSync();
+                    await ClearStateAndRedirect(error: false, cancellationToken: token);
                     return;
                 }
 
@@ -218,8 +208,7 @@ public sealed class SessionUtil : ISessionUtil
             long finalExpTicks = _expirationTicks.Read();
             if (finalExpTicks == 0 || DateTimeOffset.UtcNow.UtcTicks >= finalExpTicks)
             {
-                await ClearStateAndRedirect(error: false, cancellationToken: token)
-                    .NoSync();
+                await ClearStateAndRedirect(error: false, cancellationToken: token);
             }
         }
         catch (Exception ex)
@@ -230,8 +219,7 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask ClearStateAndRedirect(bool error, CancellationToken cancellationToken = default)
     {
-        using (await _updateLock.Lock(cancellationToken)
-                                .NoSync())
+        using (await _updateLock.Lock(cancellationToken))
         {
             if (_hasRedirected)
                 return;
@@ -244,8 +232,7 @@ public sealed class SessionUtil : ISessionUtil
         else
             _logger.LogWarning("Session expired, redirecting to expiration page");
 
-        await ClearState()
-            .NoSync();
+        await ClearState();
         _navigationUtil.NavigateTo(_sessionExpiredUri);
     }
 
@@ -257,11 +244,9 @@ public sealed class SessionUtil : ISessionUtil
 
     private async ValueTask ClearState_Locked()
     {
-        using (await _updateLock.Lock(CancellationToken.None)
-                                .NoSync())
+        using (await _updateLock.Lock(CancellationToken.None))
         {
-            await ClearState_NoLock()
-                .NoSync();
+            await ClearState_NoLock();
         }
     }
 
@@ -276,8 +261,7 @@ public sealed class SessionUtil : ISessionUtil
         {
             try
             {
-                await cts.CancelAsync()
-                         .NoSync();
+                await cts.CancelAsync();
             }
             catch
             {
