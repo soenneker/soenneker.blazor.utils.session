@@ -27,7 +27,7 @@ public sealed class SessionUtil : ISessionUtil
     private string? _accessToken;
 
     // UTC ticks of JWT expiration; 0 means "none/unknown".
-    // Stored as DateTimeOffset.UtcTicks (i.e., ticks from UTC DateTime).
+    // Stored as DateTimeOffset.UtcTicks.
     private AtomicLong _expirationTicks;
 
     // Swapped atomically whenever a new watcher is created.
@@ -45,6 +45,12 @@ public sealed class SessionUtil : ISessionUtil
 
     // Max Task.Delay we will schedule in one shot (keep well below int.MaxValue ms)
     private static readonly TimeSpan _maxDelayChunk = TimeSpan.FromDays(20);
+
+    // Single-flight token request (never await under _updateLock)
+    private Task<AccessTokenResult>? _inFlightTokenRequest;
+
+    // Hard timeout for MSAL token acquisition (prevents "infinite hang")
+    private static readonly TimeSpan _tokenAcquireTimeout = TimeSpan.FromSeconds(30);
 
     public SessionUtil(
         INavigationUtil navigationUtil,
@@ -78,11 +84,13 @@ public sealed class SessionUtil : ISessionUtil
         }
 
         // --------
-        // Slow path: lock to avoid stampede refreshing the token.
-        // Double-check after acquiring lock.
+        // Slow path: single-flight request, but NEVER hold _updateLock while awaiting MSAL.
         // --------
+        Task<AccessTokenResult> requestTask;
+
         using (await _updateLock.Lock(cancellationToken))
         {
+            // Double-check after acquiring lock
             tokenValue = _accessToken;
             expTicks = _expirationTicks.Read();
 
@@ -93,14 +101,61 @@ public sealed class SessionUtil : ISessionUtil
                     return tokenValue;
             }
 
-            // Normal MSAL pipeline
-            AccessTokenResult result = await _accessTokenProvider.RequestAccessToken();
+            // Create or reuse in-flight request
+            _inFlightTokenRequest ??= _accessTokenProvider.RequestAccessToken().AsTask();
+            requestTask = _inFlightTokenRequest;
+        }
 
+        AccessTokenResult result;
+
+        // Await outside lock + ensure in-flight is cleared on ANY completion path.
+        try
+        {
+            Task completed = await Task.WhenAny(requestTask, Task.Delay(_tokenAcquireTimeout, cancellationToken))
+                                       ;
+
+            if (!ReferenceEquals(completed, requestTask))
+            {
+                // Timeout or cancellation won the race.
+                await ResetTokenFlowAndRedirectOnStall(requestTask, cancellationToken);
+                throw new TimeoutException($"RequestAccessToken timed out after {_tokenAcquireTimeout}.");
+            }
+
+            // Propagate exceptions/cancellation from requestTask here
+            result = await requestTask;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // If caller canceled, don't redirect; just ensure we don't keep a poisoned in-flight task.
+            await ClearInFlightIfMatches(requestTask, CancellationToken.None);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Any MSAL/interop fault: clear in-flight so future calls can retry.
+            await ClearInFlightIfMatches(requestTask, CancellationToken.None);
+
+            // Optional: if you want to force a session-expired redirect on token pipeline faults:
+            _logger.LogError(ex, "Access token acquisition failed");
+            await ClearStateAndRedirect(error: true, cancellationToken: CancellationToken.None);
+
+            throw;
+        }
+        finally
+        {
+            // If the task completed (success/fault/cancel), ensure it doesn't remain cached.
+            if (requestTask.IsCompleted)
+                await ClearInFlightIfMatches(requestTask, CancellationToken.None);
+        }
+
+        // Commit/clear state under lock
+        using (await _updateLock.Lock(cancellationToken))
+        {
             if (result.TryGetToken(out AccessToken? token))
             {
                 _accessToken = token.Value;
 
-                // IMPORTANT: don't re-lock. We're already holding _updateLock.
+                // We are holding _updateLock already
                 await UpdateWithAccessToken_NoLock(token.Expires);
 
                 return _accessToken!;
@@ -112,7 +167,6 @@ public sealed class SessionUtil : ISessionUtil
             await ClearState_NoLock();
 
             _navigationManager.NavigateToLogin(result.InteractiveRequestUrl);
-
             throw new AccessTokenNotAvailableException(_navigationManager, result, null);
         }
     }
@@ -174,7 +228,6 @@ public sealed class SessionUtil : ISessionUtil
                 return;
             }
 
-            // Compute delay using ticks for less overhead
             long nowTicks = DateTimeOffset.UtcNow.UtcTicks;
             long remainingTicks = expTicks - nowTicks;
 
@@ -230,8 +283,6 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask ClearStateAndRedirect(bool error, CancellationToken cancellationToken = default)
     {
-        // Do all state mutation under the lock, including ClearState_NoLock,
-        // so we don't churn re-locking and we keep a single ownership boundary.
         using (await _updateLock.Lock(cancellationToken))
         {
             if (_hasRedirected)
@@ -281,6 +332,37 @@ public sealed class SessionUtil : ISessionUtil
 
             cts.Dispose();
         }
+    }
+
+    private async ValueTask ClearInFlightIfMatches(Task<AccessTokenResult> requestTask, CancellationToken cancellationToken)
+    {
+        using (await _updateLock.Lock(cancellationToken))
+        {
+            if (ReferenceEquals(_inFlightTokenRequest, requestTask))
+                _inFlightTokenRequest = null;
+        }
+    }
+
+    private async ValueTask ResetTokenFlowAndRedirectOnStall(Task<AccessTokenResult> requestTask, CancellationToken cancellationToken)
+    {
+        // We cannot reliably obtain InteractiveRequestUrl on a stall, so redirect to session-expired
+        using (await _updateLock.Lock(cancellationToken))
+        {
+            if (ReferenceEquals(_inFlightTokenRequest, requestTask))
+                _inFlightTokenRequest = null;
+
+            _accessToken = null;
+            await ClearState_NoLock();
+
+            // Ensure we don't spam redirects
+            if (_hasRedirected)
+                return;
+
+            _hasRedirected = true;
+        }
+
+        _logger.LogWarning("Access token acquisition stalled; redirecting to expiration page");
+        _navigationUtil.NavigateTo(_sessionExpiredUri);
     }
 
     public ValueTask DisposeAsync() => ClearState();
