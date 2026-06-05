@@ -15,6 +15,11 @@ namespace Soenneker.Blazor.Utils.Session.Abstract;
 /// </remarks>
 public interface ISessionUtil : IDisposable, IAsyncDisposable
 {
+    /// <summary>
+    /// Gets access token.
+    /// </summary>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>A task containing the result of the operation.</returns>
     ValueTask<string> GetAccessToken(CancellationToken cancellationToken = default);
 
     /// <summary>
