@@ -6,7 +6,7 @@ using Soenneker.Blazor.Utils.Session.Abstract;
 namespace Soenneker.Blazor.Utils.Session.Registrars;
 
 /// <summary>
-/// A Blazor utility for automatic navigation after JWT expiration
+/// A Blazor utility for access-token caching and optional idle-timeout navigation.
 /// </summary>
 public static class SessionUtilRegistrar
 {

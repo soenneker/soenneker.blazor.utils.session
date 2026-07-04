@@ -30,8 +30,12 @@ public sealed class SessionUtil : ISessionUtil
     // Stored as DateTimeOffset.UtcTicks.
     private AtomicLong _expirationTicks;
 
-    // Swapped atomically whenever a new watcher is created.
+    // Swapped atomically whenever a new token expiration watcher is created.
     private CancellationTokenSource? _cts;
+
+    private CancellationTokenSource? _idleCts;
+    private readonly TimeSpan _idleTimeout;
+    private AtomicLong _lastActivityTicks;
 
     private readonly string _sessionExpiredUri;
 
@@ -66,10 +70,16 @@ public sealed class SessionUtil : ISessionUtil
 
         var sessionExpiredUri = config.GetValue<string>("Session:Uri");
         _sessionExpiredUri = sessionExpiredUri.HasContent() ? sessionExpiredUri : "errors/sessionexpired";
+
+        var idleTimeoutMinutes = config.GetValue<int?>("Session:IdleTimeoutMinutes") ?? config.GetValue<int?>("Session:TimeoutMinutes");
+        if (idleTimeoutMinutes is > 0)
+            _idleTimeout = TimeSpan.FromMinutes(idleTimeoutMinutes.Value);
     }
 
     public async ValueTask<string> GetAccessToken(CancellationToken cancellationToken = default)
     {
+        await RecordActivity(cancellationToken);
+
         // --------
         // Fast path: cached token and not near expiry
         // --------
@@ -166,7 +176,7 @@ public sealed class SessionUtil : ISessionUtil
 
             await ClearState_NoLock();
 
-            _navigationManager.NavigateToLogin(result.InteractiveRequestUrl);
+            _navigationManager.NavigateToLogin(result.InteractiveRequestUrl ?? _sessionExpiredUri);
             throw new AccessTokenNotAvailableException(_navigationManager, result, null);
         }
     }
@@ -177,12 +187,18 @@ public sealed class SessionUtil : ISessionUtil
 
         // Fast path: if unchanged, skip lock/work
         if (_expirationTicks.Read() == newTicks)
+        {
+            await RecordActivity(cancellationToken);
             return;
+        }
 
         using (await _updateLock.Lock(cancellationToken))
         {
             if (_expirationTicks.Read() == newTicks)
+            {
+                await RecordActivity_NoLock();
                 return;
+            }
 
             await UpdateWithAccessToken_NoLock(expiration);
         }
@@ -195,6 +211,7 @@ public sealed class SessionUtil : ISessionUtil
 
         _hasRedirected = false;
         _expirationTicks.Write(newTicks);
+        await RecordActivity_NoLock();
 
         var newCts = new CancellationTokenSource();
         CancellationTokenSource? oldCts = Interlocked.Exchange(ref _cts, newCts);
@@ -223,17 +240,14 @@ public sealed class SessionUtil : ISessionUtil
             long expTicks = _expirationTicks.Read();
 
             if (expTicks == 0)
-            {
-                await ClearStateAndRedirect(error: true, cancellationToken: token);
                 return;
-            }
 
             long nowTicks = DateTimeOffset.UtcNow.UtcTicks;
             long remainingTicks = expTicks - nowTicks;
 
             if (remainingTicks <= 0)
             {
-                await ClearStateAndRedirect(error: false, cancellationToken: token);
+                await ClearExpiredAccessToken(token);
                 return;
             }
 
@@ -257,10 +271,7 @@ public sealed class SessionUtil : ISessionUtil
                 long currentExpTicks = _expirationTicks.Read();
 
                 if (currentExpTicks == 0)
-                {
-                    await ClearStateAndRedirect(error: false, cancellationToken: token);
                     return;
-                }
 
                 long nowTicks2 = DateTimeOffset.UtcNow.UtcTicks;
                 remainingTicks = currentExpTicks - nowTicks2;
@@ -272,12 +283,102 @@ public sealed class SessionUtil : ISessionUtil
             long finalExpTicks = _expirationTicks.Read();
             if (finalExpTicks == 0 || DateTimeOffset.UtcNow.UtcTicks >= finalExpTicks)
             {
-                await ClearStateAndRedirect(error: false, cancellationToken: token);
+                await ClearExpiredAccessToken(token);
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // New expiration set / canceled: just exit.
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Session background loop failed");
+            _logger.LogError(ex, "Access token expiration background loop failed");
+        }
+    }
+
+    private async ValueTask RecordActivity(CancellationToken cancellationToken)
+    {
+        if (_idleTimeout <= TimeSpan.Zero)
+            return;
+
+        using (await _updateLock.Lock(cancellationToken))
+        {
+            await RecordActivity_NoLock();
+        }
+    }
+
+    // Assumes caller holds _updateLock
+    private async ValueTask RecordActivity_NoLock()
+    {
+        if (_idleTimeout <= TimeSpan.Zero || _hasRedirected)
+            return;
+
+        _lastActivityTicks.Write(DateTimeOffset.UtcNow.UtcTicks);
+
+        var newCts = new CancellationTokenSource();
+        CancellationTokenSource? oldCts = Interlocked.Exchange(ref _idleCts, newCts);
+
+        try
+        {
+            if (oldCts != null)
+                await oldCts.CancelAsync();
+        }
+        catch
+        {
+            /* ignore */
+        }
+        finally
+        {
+            oldCts?.Dispose();
+        }
+
+        _ = RunIdleTimer(newCts.Token);
+    }
+
+    private async Task RunIdleTimer(CancellationToken token)
+    {
+        try
+        {
+            while (true)
+            {
+                long lastActivityTicks = _lastActivityTicks.Read();
+
+                if (lastActivityTicks == 0)
+                    return;
+
+                TimeSpan elapsed = TimeSpan.FromTicks(DateTimeOffset.UtcNow.UtcTicks - lastActivityTicks);
+                TimeSpan remaining = _idleTimeout - elapsed;
+
+                if (remaining <= TimeSpan.Zero)
+                    break;
+
+                TimeSpan chunk = remaining > _maxDelayChunk ? _maxDelayChunk : remaining;
+                await DelayUtil.Delay(chunk, null, token);
+            }
+
+            await ClearStateAndRedirect(error: false, cancellationToken: token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Activity reset / cleared: just exit.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Session idle background loop failed");
+        }
+    }
+
+    private async ValueTask ClearExpiredAccessToken(CancellationToken cancellationToken)
+    {
+        using (await _updateLock.Lock(cancellationToken))
+        {
+            long expTicks = _expirationTicks.Read();
+
+            if (expTicks != 0 && DateTimeOffset.UtcNow.UtcTicks >= expTicks)
+            {
+                _accessToken = null;
+                _expirationTicks.Write(0);
+            }
         }
     }
 
@@ -316,6 +417,7 @@ public sealed class SessionUtil : ISessionUtil
     {
         _accessToken = null;
         _expirationTicks.Write(0);
+        _lastActivityTicks.Write(0);
 
         CancellationTokenSource? cts = Interlocked.Exchange(ref _cts, null);
 
@@ -331,6 +433,22 @@ public sealed class SessionUtil : ISessionUtil
             }
 
             cts.Dispose();
+        }
+
+        CancellationTokenSource? idleCts = Interlocked.Exchange(ref _idleCts, null);
+
+        if (idleCts != null)
+        {
+            try
+            {
+                await idleCts.CancelAsync();
+            }
+            catch
+            {
+                /* ignore */
+            }
+
+            idleCts.Dispose();
         }
     }
 
@@ -379,10 +497,28 @@ public sealed class SessionUtil : ISessionUtil
         // Best-effort: dispose without awaiting.
         _accessToken = null;
         _expirationTicks.Write(0);
+        _lastActivityTicks.Write(0);
 
         CancellationTokenSource? cts = Interlocked.Exchange(ref _cts, null);
         if (cts == null)
+        {
+            CancellationTokenSource? idleCts = Interlocked.Exchange(ref _idleCts, null);
+
+            if (idleCts == null)
+                return;
+
+            try
+            {
+                idleCts.Cancel();
+            }
+            catch
+            {
+                /* ignore */
+            }
+
+            idleCts.Dispose();
             return;
+        }
 
         try
         {
@@ -394,5 +530,20 @@ public sealed class SessionUtil : ISessionUtil
         }
 
         cts.Dispose();
+
+        CancellationTokenSource? idleCts2 = Interlocked.Exchange(ref _idleCts, null);
+        if (idleCts2 == null)
+            return;
+
+        try
+        {
+            idleCts2.Cancel();
+        }
+        catch
+        {
+            /* ignore */
+        }
+
+        idleCts2.Dispose();
     }
 }

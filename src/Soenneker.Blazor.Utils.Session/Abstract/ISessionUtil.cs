@@ -5,8 +5,8 @@ using System.Threading.Tasks;
 namespace Soenneker.Blazor.Utils.Session.Abstract;
 
 /// <summary>
-/// Provides session management utilities for Blazor applications, automatically
-/// triggering navigation when a JWT expires.
+/// Provides session management utilities for Blazor applications, including access-token caching
+/// and optional idle-timeout navigation.
 /// </summary>
 /// <remarks>
 /// The session expiration redirect target is configurable via the
@@ -23,8 +23,8 @@ public interface ISessionUtil : IDisposable, IAsyncDisposable
     ValueTask<string> GetAccessToken(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the session expiration timer using the specified JWT expiration time.
-    /// Cancels any existing timer and schedules a new background task to monitor expiration.
+    /// Updates cached access-token expiration using the specified JWT expiration time.
+    /// Cancels any existing token-expiration timer and schedules a new background task to clear the cached token.
     /// </summary>
     /// <param name="expiration">
     /// The <see cref="DateTimeOffset"/> (UTC) when the JSON Web Token will expire.
