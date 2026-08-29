@@ -18,8 +18,8 @@ public interface ISessionUtil : IDisposable, IAsyncDisposable
     /// <summary>
     /// Gets access token.
     /// </summary>
-    /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>A task containing the result of the operation.</returns>
+    /// <param name="cancellationToken">Token used to cancel the operation.</param>
+    /// <returns>A task whose result is the text returned by get Access Token.</returns>
     ValueTask<string> GetAccessToken(CancellationToken cancellationToken = default);
 
     /// <summary>
