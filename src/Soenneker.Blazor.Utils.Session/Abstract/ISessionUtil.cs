@@ -16,10 +16,10 @@ namespace Soenneker.Blazor.Utils.Session.Abstract;
 public interface ISessionUtil : IDisposable, IAsyncDisposable
 {
     /// <summary>
-    /// Gets access token.
+    /// Returns a cached access token when it is valid for at least one more minute; otherwise requests a token from the configured provider.
     /// </summary>
     /// <param name="cancellationToken">Token used to cancel the operation.</param>
-    /// <returns>A task whose result is the text returned by get Access Token.</returns>
+    /// <returns>The access-token value.</returns>
     ValueTask<string> GetAccessToken(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -29,7 +29,7 @@ public interface ISessionUtil : IDisposable, IAsyncDisposable
     /// <param name="expiration">
     /// The <see cref="DateTimeOffset"/> (UTC) when the JSON Web Token will expire.
     /// </param>
-    /// <param name="cancellationToken"></param>
+    /// <param name="cancellationToken">Token used to cancel the update.</param>
     /// <returns>
     /// A <see cref="ValueTask"/> that completes once the expiration update has been applied.
     /// </returns>
@@ -42,7 +42,7 @@ public interface ISessionUtil : IDisposable, IAsyncDisposable
     /// <c>true</c> if the state is being cleared due to an error (e.g., missing expiration);
     /// <c>false</c> if clearing due to normal token expiration.
     /// </param>
-    /// <param name="cancellationToken"></param>
+    /// <param name="cancellationToken">Token used to cancel the clear operation.</param>
     /// <returns>
     /// A <see cref="ValueTask"/> that completes once the state has been cleared
     /// and navigation has started.

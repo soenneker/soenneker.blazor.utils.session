@@ -52,6 +52,8 @@ public sealed class SessionUtil : ISessionUtil
 
     // Single-flight token request (never await under _updateLock)
     private Task<AccessTokenResult>? _inFlightTokenRequest;
+    private long _stateVersion;
+    private int _disposed;
 
     // Hard timeout for MSAL token acquisition (prevents "infinite hang")
     private static readonly TimeSpan _tokenAcquireTimeout = TimeSpan.FromSeconds(30);
@@ -63,10 +65,11 @@ public sealed class SessionUtil : ISessionUtil
         IConfiguration config,
         NavigationManager navigationManager)
     {
-        _navigationUtil = navigationUtil;
-        _accessTokenProvider = accessTokenProvider;
-        _logger = logger;
-        _navigationManager = navigationManager;
+        _navigationUtil = navigationUtil ?? throw new ArgumentNullException(nameof(navigationUtil));
+        _accessTokenProvider = accessTokenProvider ?? throw new ArgumentNullException(nameof(accessTokenProvider));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentNullException.ThrowIfNull(config);
+        _navigationManager = navigationManager ?? throw new ArgumentNullException(nameof(navigationManager));
 
         var sessionExpiredUri = config.GetValue<string>("Session:Uri");
         _sessionExpiredUri = sessionExpiredUri.HasContent() ? sessionExpiredUri : "errors/sessionexpired";
@@ -78,6 +81,7 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask<string> GetAccessToken(CancellationToken cancellationToken = default)
     {
+        ThrowIfDisposed();
         await RecordActivity(cancellationToken);
 
         // --------
@@ -97,6 +101,7 @@ public sealed class SessionUtil : ISessionUtil
         // Slow path: single-flight request, but NEVER hold _updateLock while awaiting MSAL.
         // --------
         Task<AccessTokenResult> requestTask;
+        long requestVersion;
 
         using (await _updateLock.Lock(cancellationToken))
         {
@@ -114,6 +119,7 @@ public sealed class SessionUtil : ISessionUtil
             // Create or reuse in-flight request
             _inFlightTokenRequest ??= _accessTokenProvider.RequestAccessToken().AsTask();
             requestTask = _inFlightTokenRequest;
+            requestVersion = Volatile.Read(ref _stateVersion);
         }
 
         AccessTokenResult result;
@@ -136,8 +142,7 @@ public sealed class SessionUtil : ISessionUtil
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // If caller canceled, don't redirect; just ensure we don't keep a poisoned in-flight task.
-            await ClearInFlightIfMatches(requestTask, CancellationToken.None);
+            // Caller cancellation must not discard a healthy request shared by other callers.
             throw;
         }
         catch (Exception ex)
@@ -161,6 +166,11 @@ public sealed class SessionUtil : ISessionUtil
         // Commit/clear state under lock
         using (await _updateLock.Lock(cancellationToken))
         {
+            ThrowIfDisposed();
+
+            if (Volatile.Read(ref _stateVersion) != requestVersion)
+                throw new OperationCanceledException("Session state was cleared while the access token request was in progress.");
+
             if (result.TryGetToken(out AccessToken? token))
             {
                 _accessToken = token.Value;
@@ -183,6 +193,7 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask UpdateWithAccessToken(DateTimeOffset expiration, CancellationToken cancellationToken = default)
     {
+        ThrowIfDisposed();
         long newTicks = expiration.ToUniversalTime().UtcTicks;
 
         // Fast path: if unchanged, skip lock/work
@@ -384,6 +395,7 @@ public sealed class SessionUtil : ISessionUtil
 
     public async ValueTask ClearStateAndRedirect(bool error, CancellationToken cancellationToken = default)
     {
+        ThrowIfDisposed();
         using (await _updateLock.Lock(cancellationToken))
         {
             if (_hasRedirected)
@@ -402,7 +414,11 @@ public sealed class SessionUtil : ISessionUtil
         _navigationUtil.NavigateTo(_sessionExpiredUri);
     }
 
-    public ValueTask ClearState() => ClearState_Locked();
+    public ValueTask ClearState()
+    {
+        ThrowIfDisposed();
+        return ClearState_Locked();
+    }
 
     private async ValueTask ClearState_Locked()
     {
@@ -415,6 +431,8 @@ public sealed class SessionUtil : ISessionUtil
     // Assumes caller holds _updateLock
     private async ValueTask ClearState_NoLock()
     {
+        Interlocked.Increment(ref _stateVersion);
+        _inFlightTokenRequest = null;
         _accessToken = null;
         _expirationTicks.Write(0);
         _lastActivityTicks.Write(0);
@@ -483,18 +501,31 @@ public sealed class SessionUtil : ISessionUtil
         _navigationUtil.NavigateTo(_sessionExpiredUri);
     }
 
-    /// <summary>
-    /// Asynchronously releases resources used by the current instance.
-    /// </summary>
-    /// <returns>A task that represents the asynchronous operation.</returns>
-    public ValueTask DisposeAsync() => ClearState();
+    private void ThrowIfDisposed()
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+            throw new ObjectDisposedException(nameof(SessionUtil));
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        await ClearState_Locked();
+    }
 
     /// <summary>
     /// Releases resources used by the current instance.
     /// </summary>
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
         // Best-effort: dispose without awaiting.
+        Interlocked.Increment(ref _stateVersion);
+        _inFlightTokenRequest = null;
         _accessToken = null;
         _expirationTicks.Write(0);
         _lastActivityTicks.Write(0);

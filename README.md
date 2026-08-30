@@ -5,7 +5,7 @@
 
 # Soenneker.Blazor.Utils.Session
 
-Provides session management utilities for Blazor applications, including access-token caching and optional idle-timeout navigation.
+Caches Blazor WebAssembly access tokens, refreshes tokens near expiration, and optionally redirects when session activity through the utility stops.
 
 ## Install
 
@@ -13,38 +13,73 @@ Provides session management utilities for Blazor applications, including access-
 dotnet add package Soenneker.Blazor.Utils.Session
 ```
 
-## Quick start
+Register the scoped service in `Program.cs` after configuring Blazor WebAssembly authentication:
 
 ```csharp
 using Soenneker.Blazor.Utils.Session.Registrars;
-using Microsoft.Extensions.DependencyInjection;
 
-var services = new ServiceCollection();
-var result = services.AddSessionUtilAsScoped();
+builder.Services.AddSessionUtilAsScoped();
 ```
 
-Shorthand for services.AddScoped.
+Inject `ISessionUtil` where an access token is needed:
 
-## What you get
+```razor
+@using Soenneker.Blazor.Utils.Session.Abstract
+@inject ISessionUtil Session
+```
 
-- `ISessionUtil` — Provides session management utilities for Blazor applications, including access-token caching and optional idle-timeout navigation.
-- `SessionUtilRegistrar` — A Blazor utility for access-token caching and optional idle-timeout navigation.
+```csharp
+string accessToken = await Session.GetAccessToken(cancellationToken);
+```
 
-## API at a glance
+The utility uses the registered `IAccessTokenProvider`. It returns a cached token while that token has at least one minute remaining; otherwise it coalesces concurrent callers into one provider request. A provider request that does not finish within 30 seconds clears local session state and redirects to the session-expired route.
 
-| API | What it does | Result / important behavior |
-| --- | --- | --- |
-| `ISessionUtil.UpdateWithAccessToken(expiration, cancellationToken)` | Updates cached access-token expiration using the specified JWT expiration time. Cancels any existing token-expiration timer and schedules a new background task to clear the cached token. | A `ValueTask` that completes once the expiration update has been applied. |
-| `ISessionUtil.ClearStateAndRedirect(error, cancellationToken)` | Clears all session state and navigates to the configured expiration page. | A `ValueTask` that completes once the state has been cleared and navigation has started. |
-| `ISessionUtil.ClearState()` | Clears the JWT expiration and cancels any pending expiration timer without performing a navigation redirect. | A `ValueTask` that completes once the session state has been cleared. |
-| `SessionUtilRegistrar.AddSessionUtilAsScoped(services)` | Shorthand for services.AddScoped. | The same service collection, so additional registrations can be chained. |
+## Configuration
 
-## Important behavior
+`Session:Uri` controls the app-local route used for expiration and token-acquisition failures. It defaults to `errors/sessionexpired`.
 
-- `ISessionUtil`: The session expiration redirect target is configurable via the `Session:Uri` configuration value. This service is intended for scoped dependency injection in Blazor WebAssembly.
+An idle timeout is optional. `Session:IdleTimeoutMinutes` is preferred; `Session:TimeoutMinutes` is accepted as a fallback.
 
-## Practical notes
+```json
+{
+  "Session": {
+    "Uri": "account/session-expired",
+    "IdleTimeoutMinutes": 30
+  }
+}
+```
 
-- Cancellation stops pending work; it does not undo work that has already completed.
-- Calls that return a cached or singleton value reuse the same instance until the owning service is disposed.
-- Dispose instances you own when their scope ends so held resources can be released.
+Idle activity means calls to `GetAccessToken` or `UpdateWithAccessToken`; this package does not listen for mouse, keyboard, navigation, or network activity. Omit the timeout setting, set it to `0`, or use a negative value to disable idle expiration.
+
+## Update expiration explicitly
+
+`GetAccessToken` records the provider token's expiration automatically. If another authentication path obtains or renews a token, supply its UTC expiration:
+
+```csharp
+await Session.UpdateWithAccessToken(jwtExpiration, cancellationToken);
+```
+
+When the timestamp is reached, the cached token is cleared. The next `GetAccessToken` call asks the provider for a token again.
+
+## Clear session state
+
+Clear the cached token and cancel expiration timers without navigating:
+
+```csharp
+await Session.ClearState();
+```
+
+Or clear state and navigate to the configured expiration route:
+
+```csharp
+await Session.ClearStateAndRedirect(error: false, cancellationToken);
+```
+
+The `error` argument controls whether the event is logged as an error or normal expiration. Redirects are suppressed after the first one in a session state cycle. Updating the access-token expiration starts a new cycle.
+
+## Operational behavior
+
+- Clearing or disposing the session invalidates token requests already in flight; stale results cannot restore cleared state.
+- Cancelling one caller stops that caller from waiting. The underlying `IAccessTokenProvider` request may continue because its API does not accept a cancellation token.
+- Token-provider failures clear local state, redirect to the expiration route, and are rethrown to the caller.
+- The service is intended to be scoped. Dependency injection disposes it automatically; manually created instances must be disposed.

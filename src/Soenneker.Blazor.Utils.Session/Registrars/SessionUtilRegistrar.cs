@@ -11,7 +11,7 @@ namespace Soenneker.Blazor.Utils.Session.Registrars;
 public static class SessionUtilRegistrar
 {
     /// <summary>
-    /// Shorthand for <code>services.AddScoped</code>
+    /// Registers the session and navigation utilities with scoped lifetimes.
     /// </summary>
     /// <param name="services">Service collection that receives the registration.</param>
     /// <returns>The same service collection, so additional registrations can be chained.</returns>
