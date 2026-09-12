@@ -19,7 +19,7 @@
     <ItemGroup>
         <PackageReference Include="Soenneker.Blazor.Mocks.NavigationManager" Version="4.0.426" />
         <PackageReference Include="Soenneker.Utils.Test" Version="4.0.328" />
-        <PackageReference Include="Soenneker.Tests.HostedUnit" Version="4.0.262" />
+        <PackageReference Include="Soenneker.Tests.HostedUnit" Version="4.0.264" />
         <PackageReference Include="TUnit" Version="1.67.0" />
     </ItemGroup>
 
