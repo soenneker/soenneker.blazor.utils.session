@@ -45,7 +45,7 @@
 
     <ItemGroup>
         <PackageReference Include="Soenneker.Asyncs.Locks" Version="4.0.90" />
-        <PackageReference Include="Soenneker.Atomics.Longs" Version="4.0.26" />
+        <PackageReference Include="Soenneker.Atomics.Longs" Version="4.0.27" />
         <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="4.0.1196" />
         <PackageReference Include="Soenneker.Utils.Delay" Version="4.0.89" />
     </ItemGroup>
