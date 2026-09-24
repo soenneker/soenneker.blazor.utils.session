@@ -45,8 +45,13 @@
         <PackageReference Include="Soenneker.Asyncs.Locks" Version="4.0.89" />
         <PackageReference Include="Soenneker.Atomics.Longs" Version="4.0.26" />
         <PackageReference Include="Soenneker.Blazor.Utils.Navigation" Version="4.0.1196" />
-        <PackageReference Include="Soenneker.Extensions.Configuration" Version="4.0.895" />
-        <PackageReference Include="Soenneker.Extensions.ValueTask" Version="4.0.123" />
         <PackageReference Include="Soenneker.Utils.Delay" Version="4.0.89" />
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.12" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.12" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.12" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+        <PackageReference Include="Soenneker.Extensions.String" Version="4.0.762" />
     </ItemGroup>
 </Project>

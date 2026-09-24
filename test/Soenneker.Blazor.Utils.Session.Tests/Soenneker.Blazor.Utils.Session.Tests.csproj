@@ -26,5 +26,9 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\Soenneker.Blazor.Utils.Session\Soenneker.Blazor.Utils.Session.csproj" />
     </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.12" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.12" />
+    </ItemGroup>
 </Project>
 
