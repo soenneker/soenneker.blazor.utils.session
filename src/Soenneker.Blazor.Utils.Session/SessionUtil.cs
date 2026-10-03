@@ -127,18 +127,15 @@ public sealed class SessionUtil : ISessionUtil
         // Await outside lock + ensure in-flight is cleared on ANY completion path.
         try
         {
-            Task completed = await Task.WhenAny(requestTask, Task.Delay(_tokenAcquireTimeout, cancellationToken))
-                                       ;
-
-            if (!ReferenceEquals(completed, requestTask))
+            try
             {
-                // Timeout or cancellation won the race.
-                await ResetTokenFlowAndRedirectOnStall(requestTask, cancellationToken);
-                throw new TimeoutException($"RequestAccessToken timed out after {_tokenAcquireTimeout}.");
+                result = await requestTask.WaitAsync(_tokenAcquireTimeout, cancellationToken);
             }
-
-            // Propagate exceptions/cancellation from requestTask here
-            result = await requestTask;
+            catch (TimeoutException) when (!requestTask.IsCompleted)
+            {
+                await ResetTokenFlowAndRedirectOnStall(requestTask, cancellationToken);
+                throw;
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -319,31 +316,21 @@ public sealed class SessionUtil : ISessionUtil
     }
 
     // Assumes caller holds _updateLock
-    private async ValueTask RecordActivity_NoLock()
+    private ValueTask RecordActivity_NoLock()
     {
         if (_idleTimeout <= TimeSpan.Zero || _hasRedirected)
-            return;
+            return ValueTask.CompletedTask;
 
         _lastActivityTicks.Write(DateTimeOffset.UtcNow.UtcTicks);
-
-        var newCts = new CancellationTokenSource();
-        CancellationTokenSource? oldCts = Interlocked.Exchange(ref _idleCts, newCts);
-
-        try
+        // The existing timer observes the new deadline when it wakes. Activity
+        // must not allocate a CTS, delay, and background state machine each time.
+        if (_idleCts is null)
         {
-            if (oldCts != null)
-                await oldCts.CancelAsync();
-        }
-        catch
-        {
-            /* ignore */
-        }
-        finally
-        {
-            oldCts?.Dispose();
+            _idleCts = new CancellationTokenSource();
+            _ = RunIdleTimer(_idleCts.Token);
         }
 
-        _ = RunIdleTimer(newCts.Token);
+        return ValueTask.CompletedTask;
     }
 
     private async Task RunIdleTimer(CancellationToken token)
@@ -361,13 +348,28 @@ public sealed class SessionUtil : ISessionUtil
                 TimeSpan remaining = _idleTimeout - elapsed;
 
                 if (remaining <= TimeSpan.Zero)
-                    break;
+                {
+                    // Activity may have arrived between the deadline check and
+                    // acquiring the lock; only expire the current idle period.
+                    using (await _updateLock.Lock(token))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (DateTimeOffset.UtcNow.UtcTicks - _lastActivityTicks.Read() < _idleTimeout.Ticks)
+                            continue;
+                        if (_hasRedirected)
+                            return;
+                        _hasRedirected = true;
+                        _logger.LogWarning("Session expired, redirecting to expiration page");
+                        await ClearState_NoLock();
+                    }
+                    _navigationUtil.NavigateTo(_sessionExpiredUri);
+                    return;
+                }
 
                 TimeSpan chunk = remaining > _maxDelayChunk ? _maxDelayChunk : remaining;
                 await DelayUtil.Delay(chunk, null, token);
             }
 
-            await ClearStateAndRedirect(error: false, cancellationToken: token);
         }
         catch (OperationCanceledException)
         {
