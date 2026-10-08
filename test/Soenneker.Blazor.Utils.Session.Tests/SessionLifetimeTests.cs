@@ -23,7 +23,7 @@ public sealed class SessionLifetimeTests
         new InteractiveRequestOptions { Interaction = InteractionType.GetToken, ReturnUrl = "https://example.test/" });
 
     [Test]
-    public async Task Cancelling_one_waiter_preserves_the_shared_request()
+    public async Task Cancelling_one_waiter_preserves_the_shared_request(CancellationToken cancellationToken)
     {
         var provider = new ControlledTokenProvider();
         var navigation = new RecordingNavigationManager();
@@ -31,7 +31,7 @@ public sealed class SessionLifetimeTests
         await using var session = Create(provider, navigation, navigationUtil);
         using var cancellation = new CancellationTokenSource();
         Task<string> cancelled = session.GetAccessToken(cancellation.Token).AsTask();
-        Task<string> surviving = session.GetAccessToken().AsTask();
+        Task<string> surviving = session.GetAccessToken(cancellationToken: cancellationToken).AsTask();
         await cancellation.CancelAsync();
         try { await cancelled; throw new InvalidOperationException("Expected cancellation."); }
         catch (OperationCanceledException) { }
@@ -41,17 +41,17 @@ public sealed class SessionLifetimeTests
     }
 
     [Test]
-    public async Task Cached_token_activity_reuses_the_idle_timer_and_clear_releases_it()
+    public async Task Cached_token_activity_reuses_the_idle_timer_and_clear_releases_it(CancellationToken cancellationToken)
     {
         var provider = new ControlledTokenProvider();
         provider.Completion.SetResult(Success());
         var navigation = new RecordingNavigationManager();
         await using var navigationUtil = new NavigationUtil(navigation);
         await using var session = Create(provider, navigation, navigationUtil);
-        await session.GetAccessToken();
+        await session.GetAccessToken(cancellationToken: cancellationToken);
         object? timer = _idleSource.GetValue(session);
         for (var i = 0; i < 1000; i++)
-            await session.GetAccessToken();
+            await session.GetAccessToken(cancellationToken: cancellationToken);
         if (timer is null || !ReferenceEquals(timer, _idleSource.GetValue(session)) || provider.RequestCount != 1)
             throw new InvalidOperationException("Cached activity restarted the timer or requested a token.");
         await session.ClearState();
@@ -60,13 +60,13 @@ public sealed class SessionLifetimeTests
     }
 
     [Test]
-    public async Task ClearState_prevents_an_inflight_request_from_restoring_the_token()
+    public async Task ClearState_prevents_an_inflight_request_from_restoring_the_token(CancellationToken cancellationToken)
     {
         var provider = new ControlledTokenProvider();
         var navigation = new RecordingNavigationManager();
         await using var navigationUtil = new NavigationUtil(navigation);
         await using var session = Create(provider, navigation, navigationUtil);
-        Task<string> request = session.GetAccessToken().AsTask();
+        Task<string> request = session.GetAccessToken(cancellationToken: cancellationToken).AsTask();
         await session.ClearState();
         provider.Completion.SetResult(Success());
         try { await request; throw new InvalidOperationException("Stale token was committed."); }
